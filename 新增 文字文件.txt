@@ -1,0 +1,123 @@
+import streamlit as st
+import numpy as np
+from scipy.stats import chi2
+import plotly.graph_objects as go
+ 
+# 設定網頁標題
+st.set_page_config(page_title=ALT 專業估算工具, layout=wide)
+ 
+# --- 初始化 Session State ---
+if 'last_changed' not in st.session_state
+    st.session_state.last_changed = ['cl', 'rel'] 
+if 'cl_pct' not in st.session_state st.session_state.cl_pct = 90.0
+if 'rel_pct' not in st.session_state st.session_state.rel_pct = 90.0
+if 'n_val' not in st.session_state st.session_state.n_val = 22
+ 
+# 核心：三要素連動計算函數
+def update_vars(changed_key)
+    # 紀錄變動順序
+    if changed_key in st.session_state.last_changed
+        st.session_state.last_changed.remove(changed_key)
+    st.session_state.last_changed.append(changed_key)
+    # 只取最後兩個變動的欄位來決定第三個
+    lc = st.session_state.last_changed[-2]
+    cl_dec = st.session_state.cl_input  100
+    rel_dec = st.session_state.rel_input  100
+    n_val = st.session_state.n_input
+    try
+        # 1. 根據 CL 和 R 算 N
+        if 'cl' in lc and 'rel' in lc
+            new_n = np.log(1 - cl_dec)  np.log(rel_dec)
+            st.session_state.n_val = int(np.ceil(new_n))
+        # 2. 根據 CL 和 N 算 R
+        elif 'cl' in lc and 'n' in lc
+            new_rel = np.exp(np.log(1 - cl_dec)  n_val)
+            st.session_state.rel_pct = float(new_rel  100)
+        # 3. 根據 R 和 N 算 CL
+        elif 'rel' in lc and 'n' in lc
+            new_cl = 1 - (rel_dec  n_val)
+            st.session_state.cl_pct = float(new_cl  100)
+    except Exception
+        pass
+ 
+st.title(🛡️ ALT 專業估算工具)
+ 
+# --- 側邊欄 ---
+st.sidebar.header(環境常數設定)
+ea = st.sidebar.number_input(活化能 Ea (eV), value=0.6, step=0.1)
+t_low = st.sidebar.number_input(正常使用溫度 TL (°C), value=25)
+k_constant = 8.623e-05
+ 
+# --- 第一區：資訊輸入區 ---
+st.header(📥 資訊輸入區)
+col_in1, col_in2 = st.columns(2)
+ 
+with col_in1
+    st.write(### 基礎測試條件)
+    warranty_year = st.number_input(1. 保固年份 (Year), value=2, min_value=1)
+    test_temp = st.number_input(2. 測試溫度 (°C), value=50)
+    allowed_failures = st.number_input(3. 可接受失效數 (r), value=0, min_value=0)
+ 
+with col_in2
+    st.write(### 可靠度三要素連動 (%))
+    # 信心水準 - step 調整為 1.0 (1%)
+    st.session_state.cl_pct = st.number_input(
+        4. 信心水準 (Confidence Level %), 
+        value=float(st.session_state.cl_pct), min_value=0.0, max_value=100.0, step=1.0, format=%.3f,
+        key='cl_input', on_change=update_vars, args=('cl',)
+    )
+    # 可靠度 - step 調整為 1.0 (1%)
+    st.session_state.rel_pct = st.number_input(
+        5. 可靠度 (Reliability Index %), 
+        value=float(st.session_state.rel_pct), min_value=0.0, max_value=100.0, step=1.0, format=%.3f,
+        key='rel_input', on_change=update_vars, args=('rel',)
+    )
+    # 樣品數
+    st.session_state.n_val = st.number_input(
+        6. 實際樣品數 (Pcs), 
+        value=int(st.session_state.n_val), min_value=1,
+        key='n_input', on_change=update_vars, args=('n',)
+    )
+ 
+# --- 計算運算結果 ---
+mtbf_result = warranty_year  8760
+tk_low, tk_high = t_low + 273.15, test_temp + 273.15
+af_temp = np.exp((ea  k_constant)  (1  tk_low - 1  tk_high))
+ 
+cl_decimal = st.session_state.cl_pct  100
+cl_decimal_safe = max(0.001, min(0.9999, cl_decimal))
+df_value = 2  (allowed_failures + 1)
+chi_square_val = chi2.ppf(cl_decimal_safe, df_value)
+ 
+test_hours_total = (mtbf_result  chi_square_val)  (2  st.session_state.n_input  af_temp)
+test_days = test_hours_total  24
+ 
+# --- 第二區：運算結果呈現 ---
+st.divider()
+st.header(📊 運算結果)
+res_row1_1, res_row1_2, res_row1_3 = st.columns(3)
+res_row2_1, res_row2_2, res_row2_3 = st.columns(3)
+ 
+with res_row1_1
+    st.metric(label=MTBF (小時), value=f{mtbf_result,} hrs)
+with res_row1_2
+    st.metric(label=測試時間 (小時), value=f{test_hours_total.2f} hrs)
+with res_row1_3
+    st.metric(label=測試時間 (天), value=f{test_days.2f} Days)
+ 
+with res_row2_1
+    st.metric(label=信賴水準 (Confidence Level), value=f{st.session_state.cl_pct.3f}%)
+with res_row2_2
+    st.metric(label=可靠度 (Reliability), value=f{st.session_state.rel_pct.3f}%)
+with res_row2_3
+    st.metric(label=加速因子 (AF), value=f{af_temp.2f})
+ 
+# --- 第三區：圖表 ---
+st.divider()
+st.header(📈 壽命曲線趨勢圖)
+temp_range = np.arange(40, 96, 2)
+days_needed = [( (mtbf_result  chi_square_val)  (2  st.session_state.n_input  np.exp((ea  k_constant)  (1  tk_low - (t + 273.15)-1))) )  24 for t in temp_range]
+ 
+fig = go.Figure(go.Scatter(x=temp_range, y=days_needed, mode='lines', line=dict(color='#007BFF', width=3), fill='tozeroy'))
+fig.update_layout(xaxis_title=測試溫度 (°C), yaxis_title=測試時間 (天), template=plotly_white)
+st.plotly_chart(fig, use_container_width=True)
